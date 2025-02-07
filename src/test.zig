@@ -38,7 +38,7 @@ test "basic logging" {
     const cwd = std.fs.cwd();
     const contents = try cwd.readFileAlloc(allocator, "test_output.log", std.math.maxInt(usize));
     defer allocator.free(contents);
-    // defer cwd.deleteFile("test_output.log") catch {};
+    defer cwd.deleteFile("test_output.log") catch {};
 
     // Assert there are only 4 logs printed
     var log_count: usize = 0;

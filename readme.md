@@ -35,8 +35,6 @@ pub fn main() !void {
 ```
 ### Logging to a file
 ```zig
-
-```
 const std = @import("std");
 const zlog = @import("zlog");
 
