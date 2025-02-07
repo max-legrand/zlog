@@ -27,9 +27,11 @@ Here are some small examples of how to use the library.
 const std = @import("std");
 const logger = @import("zlog").Logger;
 
-var log = logger.init(.DEBUG, true, "main", null, null, std.heap.page_allocator) catch unreachable;
+var log: logger = undefined;
 
 pub fn main() !void {
+    log = logger.init(.DEBUG, true, "main", null, null, std.heap.page_allocator) catch unreachable;
+    defer log.deinit();
     log.info("Hello, World!", .{});
 }
 ```
