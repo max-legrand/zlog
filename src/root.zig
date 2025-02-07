@@ -1,0 +1,159 @@
+const std = @import("std");
+const c = @cImport({
+    @cInclude("time.h");
+});
+
+const heap_allocator = std.heap.page_allocator;
+
+pub const Logger = struct {
+    pub const Level = enum {
+        DEBUG,
+        INFO,
+        WARN,
+        ERROR,
+
+        pub fn toString(self: Level) []const u8 {
+            return switch (self) {
+                .DEBUG => "DEBUG",
+                .INFO => "INFO",
+                .WARN => "WARN",
+                .ERROR => "ERROR",
+            };
+        }
+
+        pub fn getColor(self: Level) []const u8 {
+            return switch (self) {
+                .DEBUG => "\x1b[35m", // Purple
+                .INFO => "\x1b[36m", // Cyan
+                .WARN => "\x1b[33m", // Yellow
+                .ERROR => "\x1b[31m", // Red
+            };
+        }
+    };
+
+    level: Level,
+    scope_stack: std.ArrayList([]const u8),
+    stdout: ?std.fs.File,
+    stderr: ?std.fs.File,
+    colors: bool,
+    allocator: std.mem.Allocator,
+
+    pub fn init(
+        level: Level,
+        colors: bool,
+        scope: ?[]const u8,
+        stdout: ?std.fs.File,
+        stderr: ?std.fs.File,
+        arg_allocator: ?std.mem.Allocator,
+    ) !Logger {
+        const allocator = if (arg_allocator) |a| a else heap_allocator;
+        var scope_stack = std.ArrayList([]const u8).init(allocator);
+        if (scope) |s| try scope_stack.append(s);
+        return .{
+            .level = level,
+            .scope_stack = scope_stack,
+            .stdout = stdout,
+            .stderr = stderr,
+            .colors = colors,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn pushScope(self: *Logger, scope: []const u8) !void {
+        try self.scope_stack.append(scope);
+    }
+
+    pub fn popScope(self: *Logger) !void {
+        if (self.scope_stack.items.len > 0) {
+            _ = self.scope_stack.pop();
+        }
+    }
+
+    fn getCurrentScope(self: *Logger) []const u8 {
+        if (self.scope_stack.items.len > 0) {
+            return self.scope_stack.items[self.scope_stack.items.len - 1];
+        } else {
+            return "";
+        }
+    }
+
+    fn log(self: *Logger, level: Level, comptime fmt: []const u8, args: anytype) void {
+        if (@intFromEnum(level) < @intFromEnum(self.level)) return;
+
+        const writer = if (level == .ERROR)
+            if (self.stderr) |err_file| err_file.writer() else std.io.getStdErr().writer()
+        else if (self.stdout) |out_file| out_file.writer() else std.io.getStdOut().writer();
+
+        // Get current time
+        const timestamp = std.time.timestamp();
+        var time_struct: c.tm = undefined;
+        const time_ptr = c.localtime(&timestamp);
+        if (time_ptr) |tm| {
+            time_struct = tm.*;
+        } else return;
+
+        // Format the time string
+        var time_buf: [32]u8 = undefined;
+        _ = c.strftime(&time_buf, time_buf.len, "%Y-%m-%d %H:%M:%S", &time_struct);
+
+        if (self.colors) {
+            writer.print("{s}", .{level.getColor()}) catch {};
+        }
+
+        const current_scope = self.getCurrentScope();
+        if (std.mem.eql(u8, current_scope, "")) {
+            writer.print("{s} [{s}] ", .{
+                std.mem.sliceTo(&time_buf, 0),
+                level.toString(),
+            }) catch {};
+        } else {
+            writer.print("{s} [{s}] ({s}) ", .{
+                std.mem.sliceTo(&time_buf, 0),
+                level.toString(),
+                current_scope,
+            }) catch {};
+        }
+
+        if (self.colors) {
+            writer.print("\x1b[0m", .{}) catch {}; // Reset color
+        }
+
+        writer.print(fmt ++ "\n", args) catch {};
+    }
+
+    pub fn debug(self: *Logger, comptime fmt: []const u8, args: anytype) void {
+        self.log(.DEBUG, fmt, args);
+    }
+
+    pub fn info(self: *Logger, comptime fmt: []const u8, args: anytype) void {
+        self.log(.INFO, fmt, args);
+    }
+
+    pub fn warn(self: *Logger, comptime fmt: []const u8, args: anytype) void {
+        self.log(.WARN, fmt, args);
+    }
+
+    pub fn err(self: *Logger, comptime fmt: []const u8, args: anytype) void {
+        self.log(.ERROR, fmt, args);
+    }
+
+    pub fn deinit(self: *Logger) void {
+        var same_file = false;
+        if (self.stdout != null and self.stderr != null) {
+            const stdout = self.stdout.?;
+            const stderr = self.stderr.?;
+            if (stdout.handle == stderr.handle) {
+                same_file = true;
+            }
+        }
+        if (self.stdout) |file| {
+            std.fs.File.close(file);
+        }
+        if (self.stderr) |file| {
+            if (!same_file) {
+                std.fs.File.close(file);
+            }
+        }
+        self.scope_stack.deinit();
+    }
+};
