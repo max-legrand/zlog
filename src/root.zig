@@ -157,3 +157,41 @@ pub const Logger = struct {
         self.scope_stack.deinit();
     }
 };
+
+// Global logging instance
+pub var glog: Logger = undefined;
+
+pub fn initGlobalLogger(
+    level: Logger.Level,
+    colors: bool,
+    scope: ?[]const u8,
+    stdout: ?std.fs.File,
+    stderr: ?std.fs.File,
+    allocator: ?std.mem.Allocator,
+) !void {
+    glog = try Logger.init(level, colors, scope, stdout, stderr, allocator);
+}
+
+pub fn deinitGlobalLogger() void {
+    glog.deinit();
+}
+
+pub fn debug(comptime fmt: []const u8, args: anytype) void {
+    glog.debug(fmt, args);
+}
+
+pub fn info(comptime fmt: []const u8, args: anytype) void {
+    glog.info(fmt, args);
+}
+
+pub fn warn(comptime fmt: []const u8, args: anytype) void {
+    glog.warn(fmt, args);
+}
+
+pub fn err(comptime fmt: []const u8, args: anytype) void {
+    glog.err(fmt, args);
+}
+
+pub fn setLevel(level: Logger.Level) void {
+    glog.level = level;
+}
