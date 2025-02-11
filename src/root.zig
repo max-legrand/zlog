@@ -195,3 +195,15 @@ pub fn err(comptime fmt: []const u8, args: anytype) void {
 pub fn setLevel(level: Logger.Level) void {
     glog.level = level;
 }
+
+pub fn pushScope(scope: []const u8) !void {
+    try glog.pushScope(scope);
+}
+
+pub fn popScope() ![]const u8 {
+    if (glog.scope_stack.items.len > 0) {
+        const prev = glog.scope_stack.pop();
+        return prev;
+    }
+    return "";
+}
