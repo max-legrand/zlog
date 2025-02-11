@@ -203,7 +203,8 @@ pub fn pushScope(scope: []const u8) !void {
 pub fn popScope() ![]const u8 {
     if (glog.scope_stack.items.len > 0) {
         const prev = glog.scope_stack.pop();
-        return prev;
+        if (prev) |p| return p;
+        return "";
     }
     return "";
 }
