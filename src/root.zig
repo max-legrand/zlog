@@ -5,6 +5,21 @@ const c = @cImport({
 
 const heap_allocator = std.heap.page_allocator;
 
+var stdout_mutex = std.Thread.Mutex.Recursive.init;
+var stderr_mutex = std.Thread.Mutex.Recursive.init;
+fn lockStdout() void {
+    stdout_mutex.lock();
+}
+fn unlockStdout() void {
+    stdout_mutex.unlock();
+}
+fn lockStderr() void {
+    stderr_mutex.lock();
+}
+fn unlockStderr() void {
+    stderr_mutex.unlock();
+}
+
 pub const Logger = struct {
     pub const Level = enum {
         DEBUG,
@@ -37,6 +52,7 @@ pub const Logger = struct {
     stderr: ?std.fs.File,
     colors: bool,
     allocator: std.mem.Allocator,
+    scope_mutex: std.Thread.Mutex.Recursive,
 
     pub fn init(
         level: Level,
@@ -56,20 +72,30 @@ pub const Logger = struct {
             .stderr = stderr,
             .colors = colors,
             .allocator = allocator,
+            .scope_mutex = std.Thread.Mutex.Recursive.init,
         };
     }
 
     pub fn pushScope(self: *Logger, scope: []const u8) !void {
+        self.scope_mutex.lock();
+        defer self.scope_mutex.unlock();
+
         try self.scope_stack.append(scope);
     }
 
     pub fn popScope(self: *Logger) !void {
+        self.scope_mutex.lock();
+        defer self.scope_mutex.unlock();
+
         if (self.scope_stack.items.len > 0) {
             _ = self.scope_stack.pop();
         }
     }
 
     fn getCurrentScope(self: *Logger) []const u8 {
+        self.scope_mutex.lock();
+        defer self.scope_mutex.unlock();
+
         if (self.scope_stack.items.len > 0) {
             return self.scope_stack.items[self.scope_stack.items.len - 1];
         } else {
@@ -79,6 +105,23 @@ pub const Logger = struct {
 
     fn log(self: *Logger, level: Level, comptime fmt: []const u8, args: anytype) void {
         if (@intFromEnum(level) < @intFromEnum(self.level)) return;
+
+        const is_error = level == .ERROR;
+        if (is_error) {
+            if (self.stderr != null) {
+                // Custom file, no need for the global lock
+            } else {
+                lockStderr();
+                defer unlockStderr();
+            }
+        } else {
+            if (self.stdout != null) {
+                // Custom file, no need for the global lock
+            } else {
+                lockStdout();
+                defer unlockStdout();
+            }
+        }
 
         const writer = if (level == .ERROR)
             if (self.stderr) |err_file| err_file.writer() else std.io.getStdErr().writer()
@@ -97,17 +140,17 @@ pub const Logger = struct {
         _ = c.strftime(&time_buf, time_buf.len, "%Y-%m-%d %H:%M:%S", &time_struct);
 
         if (self.colors) {
-            writer.print("{s}", .{level.getColor()}) catch {};
+            nosuspend writer.print("{s}", .{level.getColor()}) catch {};
         }
 
         const current_scope = self.getCurrentScope();
         if (std.mem.eql(u8, current_scope, "")) {
-            writer.print("{s} [{s}] ", .{
+            nosuspend writer.print("{s} [{s}] ", .{
                 std.mem.sliceTo(&time_buf, 0),
                 level.toString(),
             }) catch {};
         } else {
-            writer.print("{s} [{s}] ({s}) ", .{
+            nosuspend writer.print("{s} [{s}] ({s}) ", .{
                 std.mem.sliceTo(&time_buf, 0),
                 level.toString(),
                 current_scope,
@@ -115,10 +158,10 @@ pub const Logger = struct {
         }
 
         if (self.colors) {
-            writer.print("\x1b[0m", .{}) catch {}; // Reset color
+            nosuspend writer.print("\x1b[0m", .{}) catch {}; // Reset color
         }
 
-        writer.print(fmt ++ "\n", args) catch {};
+        nosuspend writer.print(fmt ++ "\n", args) catch {};
     }
 
     pub fn debug(self: *Logger, comptime fmt: []const u8, args: anytype) void {
@@ -138,6 +181,9 @@ pub const Logger = struct {
     }
 
     pub fn deinit(self: *Logger) void {
+        self.scope_mutex.lock();
+        defer self.scope_mutex.unlock();
+
         var same_file = false;
         if (self.stdout != null and self.stderr != null) {
             const stdout = self.stdout.?;
@@ -201,6 +247,9 @@ pub fn pushScope(scope: []const u8) !void {
 }
 
 pub fn popScope() ![]const u8 {
+    glog.scope_mutex.lock();
+    defer glog.scope_mutex.unlock();
+
     if (glog.scope_stack.items.len > 0) {
         const prev = glog.scope_stack.pop();
         if (prev) |p| return p;
