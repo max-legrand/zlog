@@ -107,22 +107,6 @@ pub const Logger = struct {
         if (@intFromEnum(level) < @intFromEnum(self.level)) return;
 
         const is_error = level == .ERROR;
-        if (is_error) {
-            if (self.stderr != null) {
-                // Custom file, no need for the global lock
-            } else {
-                lockStderr();
-                defer unlockStderr();
-            }
-        } else {
-            if (self.stdout != null) {
-                // Custom file, no need for the global lock
-            } else {
-                lockStdout();
-                defer unlockStdout();
-            }
-        }
-
         const writer = if (level == .ERROR)
             if (self.stderr) |err_file| err_file.writer() else std.io.getStdErr().writer()
         else if (self.stdout) |out_file| out_file.writer() else std.io.getStdOut().writer();
@@ -139,29 +123,54 @@ pub const Logger = struct {
         var time_buf: [32]u8 = undefined;
         _ = c.strftime(&time_buf, time_buf.len, "%Y-%m-%d %H:%M:%S", &time_struct);
 
+        // Build the log message in a buffer first
+        var buf = std.ArrayList(u8).init(self.allocator);
+        defer buf.deinit();
+
+        const bufWriter = buf.writer();
+
         if (self.colors) {
-            nosuspend writer.print("{s}", .{level.getColor()}) catch {};
+            bufWriter.print("{s}", .{level.getColor()}) catch return;
         }
 
         const current_scope = self.getCurrentScope();
         if (std.mem.eql(u8, current_scope, "")) {
-            nosuspend writer.print("{s} [{s}] ", .{
+            bufWriter.print("{s} [{s}] ", .{
                 std.mem.sliceTo(&time_buf, 0),
                 level.toString(),
-            }) catch {};
+            }) catch return;
         } else {
-            nosuspend writer.print("{s} [{s}] ({s}) ", .{
+            bufWriter.print("{s} [{s}] ({s}) ", .{
                 std.mem.sliceTo(&time_buf, 0),
                 level.toString(),
                 current_scope,
-            }) catch {};
+            }) catch return;
         }
 
         if (self.colors) {
-            nosuspend writer.print("\x1b[0m", .{}) catch {}; // Reset color
+            bufWriter.print("\x1b[0m", .{}) catch return; // Reset color
         }
 
-        nosuspend writer.print(fmt ++ "\n", args) catch {};
+        bufWriter.print(fmt ++ "\n", args) catch return;
+
+        if (is_error) {
+            if (self.stderr != null) {
+                // Custom file, no need for the global lock
+            } else {
+                lockStderr();
+                defer unlockStderr();
+            }
+        } else {
+            if (self.stdout != null) {
+                // Custom file, no need for the global lock
+            } else {
+                lockStdout();
+                defer unlockStdout();
+            }
+        }
+
+        // Write the entire message at once
+        nosuspend writer.writeAll(buf.items) catch {};
     }
 
     pub fn debug(self: *Logger, comptime fmt: []const u8, args: anytype) void {
