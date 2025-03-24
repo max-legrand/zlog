@@ -112,7 +112,10 @@ pub const Logger = struct {
         else if (self.stdout) |out_file| out_file.writer() else std.io.getStdOut().writer();
 
         // Get current time
-        const timestamp = std.time.timestamp();
+        const current_time: i64 = std.time.milliTimestamp();
+        const timestamp = @divFloor(current_time, 1000);
+        const ms: u32 = @intCast(@mod(current_time, 1000));
+
         var time_struct: c.tm = undefined;
         const time_ptr = c.localtime(&timestamp);
         if (time_ptr) |tm| {
@@ -135,13 +138,15 @@ pub const Logger = struct {
 
         const current_scope = self.getCurrentScope();
         if (std.mem.eql(u8, current_scope, "")) {
-            bufWriter.print("{s} [{s}] ", .{
+            bufWriter.print("{s}.{:0>3} [{s}] ", .{
                 std.mem.sliceTo(&time_buf, 0),
+                ms,
                 level.toString(),
             }) catch return;
         } else {
-            bufWriter.print("{s} [{s}] ({s}) ", .{
+            bufWriter.print("{s}.{:0>3} [{s}] ({s}) ", .{
                 std.mem.sliceTo(&time_buf, 0),
+                ms,
                 level.toString(),
                 current_scope,
             }) catch return;
