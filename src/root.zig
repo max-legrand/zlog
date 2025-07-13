@@ -220,6 +220,7 @@ pub const Logger = struct {
 
 // Global logging instance
 pub var glog: Logger = undefined;
+var glog_set = false;
 
 pub fn initGlobalLogger(
     level: Logger.Level,
@@ -230,37 +231,63 @@ pub fn initGlobalLogger(
     allocator: ?std.mem.Allocator,
 ) !void {
     glog = try Logger.init(level, colors, scope, stdout, stderr, allocator);
+    glog_set = true;
 }
 
 pub fn deinitGlobalLogger() void {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
     glog.deinit();
+    glog_set = false;
 }
 
 pub fn debug(comptime fmt: []const u8, args: anytype) void {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
     glog.debug(fmt, args);
 }
 
 pub fn info(comptime fmt: []const u8, args: anytype) void {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
     glog.info(fmt, args);
 }
 
 pub fn warn(comptime fmt: []const u8, args: anytype) void {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
     glog.warn(fmt, args);
 }
 
 pub fn err(comptime fmt: []const u8, args: anytype) void {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
     glog.err(fmt, args);
 }
 
 pub fn setLevel(level: Logger.Level) void {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
     glog.level = level;
 }
 
 pub fn pushScope(scope: []const u8) !void {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
     try glog.pushScope(scope);
 }
 
 pub fn popScope() ![]const u8 {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
     glog.scope_mutex.lock();
     defer glog.scope_mutex.unlock();
 
