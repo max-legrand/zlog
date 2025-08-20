@@ -63,8 +63,8 @@ pub const Logger = struct {
         arg_allocator: ?std.mem.Allocator,
     ) !Logger {
         const allocator = if (arg_allocator) |a| a else heap_allocator;
-        var scope_stack = std.ArrayList([]const u8).init(allocator);
-        if (scope) |s| try scope_stack.append(s);
+        var scope_stack = try std.ArrayList([]const u8).initCapacity(allocator, 10);
+        if (scope) |s| try scope_stack.append(allocator, s);
         return .{
             .level = level,
             .scope_stack = scope_stack,
@@ -80,7 +80,7 @@ pub const Logger = struct {
         self.scope_mutex.lock();
         defer self.scope_mutex.unlock();
 
-        try self.scope_stack.append(scope);
+        try self.scope_stack.append(self.allocator, scope);
     }
 
     pub fn popScope(self: *Logger) !void {
@@ -107,9 +107,6 @@ pub const Logger = struct {
         if (@intFromEnum(level) < @intFromEnum(self.level)) return;
 
         const is_error = level == .ERROR;
-        const writer = if (level == .ERROR)
-            if (self.stderr) |err_file| err_file.writer() else std.io.getStdErr().writer()
-        else if (self.stdout) |out_file| out_file.writer() else std.io.getStdOut().writer();
 
         // Get current time
         const current_time: i64 = std.time.milliTimestamp();
@@ -127,10 +124,12 @@ pub const Logger = struct {
         _ = c.strftime(&time_buf, time_buf.len, "%Y-%m-%d %H:%M:%S", &time_struct);
 
         // Build the log message in a buffer first
-        var buf = std.ArrayList(u8).init(self.allocator);
-        defer buf.deinit();
+        var buf = std.ArrayList(u8).initCapacity(self.allocator, 256) catch {
+            @panic("Failed to allocate memory for log message");
+        };
+        defer buf.deinit(self.allocator);
 
-        const bufWriter = buf.writer();
+        const bufWriter = buf.writer(self.allocator);
 
         if (self.colors) {
             bufWriter.print("{s}", .{level.getColor()}) catch return;
@@ -174,8 +173,19 @@ pub const Logger = struct {
             }
         }
 
-        // Write the entire message at once
-        nosuspend writer.writeAll(buf.items) catch {};
+        if (level == .ERROR) {
+            if (self.stderr) |err_file| {
+                nosuspend err_file.writeAll(buf.items) catch {};
+            } else {
+                nosuspend std.fs.File.stderr().writeAll(buf.items) catch {};
+            }
+        } else {
+            if (self.stdout) |out_file| {
+                nosuspend out_file.writeAll(buf.items) catch {};
+            } else {
+                nosuspend std.fs.File.stdout().writeAll(buf.items) catch {};
+            }
+        }
     }
 
     pub fn debug(self: *Logger, comptime fmt: []const u8, args: anytype) void {
@@ -214,7 +224,7 @@ pub const Logger = struct {
                 std.fs.File.close(file);
             }
         }
-        self.scope_stack.deinit();
+        self.scope_stack.deinit(self.allocator);
     }
 };
 

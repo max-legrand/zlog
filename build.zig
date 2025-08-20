@@ -31,9 +31,10 @@ pub fn build(b: *std.Build) void {
     // Now, we will create a static library based on the module we created above.
     // This creates a `std.Build.Step.Compile`, which is the build step responsible
     // for actually invoking the compiler.
-    const lib = b.addStaticLibrary(.{
+    const lib = b.addLibrary(.{
         .name = "zlog",
         .root_module = lib_mod,
+        .linkage = .static,
     });
 
     lib.linkLibC();
@@ -45,10 +46,13 @@ pub fn build(b: *std.Build) void {
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
-    const lib_unit_tests = b.addTest(.{
+    const test_module = b.createModule(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
+    });
+    const lib_unit_tests = b.addTest(.{
+        .root_module = test_module,
     });
     lib_unit_tests.linkLibC();
 
@@ -60,11 +64,14 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
 
-    const lib_check = b.addExecutable(.{
-        .name = "check",
+    const lib_check_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .root_source_file = b.path("src/main.zig"),
+    });
+    const lib_check = b.addExecutable(.{
+        .name = "check",
+        .root_module = lib_check_module,
     });
     const check = b.step("check", "Check if the program compiles");
     check.dependOn(&lib_check.step);
