@@ -63,7 +63,7 @@ pub const Logger = struct {
         arg_allocator: ?std.mem.Allocator,
     ) !Logger {
         const allocator = if (arg_allocator) |a| a else heap_allocator;
-        var scope_stack = try std.ArrayList([]const u8).initCapacity(allocator, 10);
+        var scope_stack = std.ArrayList([]const u8).empty;
         if (scope) |s| try scope_stack.append(allocator, s);
         return .{
             .level = level,
@@ -103,6 +103,8 @@ pub const Logger = struct {
         }
     }
 
+    const INIT_CAPACITY = 256;
+
     fn log(self: *Logger, level: Level, comptime fmt: []const u8, args: anytype) void {
         if (@intFromEnum(level) < @intFromEnum(self.level)) return;
 
@@ -124,7 +126,7 @@ pub const Logger = struct {
         _ = c.strftime(&time_buf, time_buf.len, "%Y-%m-%d %H:%M:%S", &time_struct);
 
         // Build the log message in a buffer first
-        var buf = std.ArrayList(u8).initCapacity(self.allocator, 256) catch {
+        var buf = std.ArrayList(u8).initCapacity(self.allocator, INIT_CAPACITY) catch {
             @panic("Failed to allocate memory for log message");
         };
         defer buf.deinit(self.allocator);
