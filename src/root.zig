@@ -3,8 +3,6 @@ const c = @cImport({
     @cInclude("time.h");
 });
 
-const heap_allocator = std.heap.page_allocator;
-
 var stdout_mutex = std.Thread.Mutex.Recursive.init;
 var stderr_mutex = std.Thread.Mutex.Recursive.init;
 fn lockStdout() void {
@@ -60,9 +58,8 @@ pub const Logger = struct {
         scope: ?[]const u8,
         stdout: ?std.fs.File,
         stderr: ?std.fs.File,
-        arg_allocator: ?std.mem.Allocator,
+        allocator: std.mem.Allocator,
     ) !Logger {
-        const allocator = if (arg_allocator) |a| a else heap_allocator;
         var scope_stack = std.ArrayList([]const u8).empty;
         if (scope) |s| try scope_stack.append(allocator, s);
         return .{
@@ -240,10 +237,32 @@ pub fn initGlobalLogger(
     scope: ?[]const u8,
     stdout: ?std.fs.File,
     stderr: ?std.fs.File,
-    allocator: ?std.mem.Allocator,
+    allocator: std.mem.Allocator,
 ) !void {
     glog = try Logger.init(level, colors, scope, stdout, stderr, allocator);
     glog_set = true;
+}
+
+/// Opinionated default global logger
+pub fn initGlogDefault(allocator: std.mem.Allocator) !void {
+    glog = try Logger.init(
+        .INFO,
+        true,
+        null,
+        null,
+        null,
+        allocator,
+    );
+    glog_set = true;
+}
+
+pub fn printStack() void {
+    if (!glog_set) {
+        @panic("Global logger not initialized");
+    }
+    for (glog.scope_stack.items) |scope| {
+        std.debug.print("{s}\n", .{scope});
+    }
 }
 
 pub fn deinitGlobalLogger() void {
