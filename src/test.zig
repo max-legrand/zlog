@@ -2,19 +2,20 @@ const std = @import("std");
 const testing = std.testing;
 const zlog = @import("root.zig");
 
-fn createLogFile() std.fs.File {
-    const cwd = std.fs.cwd();
-    cwd.access("test_output.log", .{}) catch {
-        return cwd.createFile("test_output.log", .{}) catch unreachable;
+fn createLogFile(io: std.Io) std.Io.File {
+    const cwd = std.Io.Dir.cwd();
+    cwd.access(io, "test_output.log", .{}) catch {
+        return cwd.createFile(io, "test_output.log", .{}) catch unreachable;
     };
 
-    cwd.deleteFile("test_output.log") catch {};
-    return cwd.createFile("test_output.log", .{}) catch unreachable;
+    cwd.deleteFile(io, "test_output.log") catch {};
+    return cwd.createFile(io, "test_output.log", .{}) catch unreachable;
 }
 
 test "basic logging" {
     testing.log_level = .debug;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const io = testing.io;
+    var gpa = std.heap.DebugAllocator(.{}).init;
     const allocator = gpa.allocator();
     defer if (gpa.deinit() == .leak) {
         std.debug.print("Memory leaked", .{});
@@ -22,8 +23,8 @@ test "basic logging" {
     };
 
     // no colors, no initial scope, log to file
-    const log_file = createLogFile();
-    var log = try zlog.Logger.init(.INFO, false, null, log_file, log_file, allocator);
+    const log_file = createLogFile(io);
+    var log = try zlog.Logger.init(.INFO, false, null, log_file, log_file, allocator, io);
     defer log.deinit();
 
     log.debug("This should not appear", .{});
@@ -32,13 +33,13 @@ test "basic logging" {
     log.err("This should appear", .{});
 
     try log.pushScope("test");
-    defer log.popScope() catch error.ScopeStackEmpty;
     log.info("This should be printed with scope", .{});
+    try log.popScope();
 
-    const cwd = std.fs.cwd();
-    const contents = try cwd.readFileAlloc(allocator, "test_output.log", std.math.maxInt(usize));
+    const cwd = std.Io.Dir.cwd();
+    const contents = try cwd.readFileAlloc(io, "test_output.log", allocator, .unlimited);
     defer allocator.free(contents);
-    defer cwd.deleteFile("test_output.log") catch {};
+    defer cwd.deleteFile(io, "test_output.log") catch {};
 
     // Assert there are only 4 logs printed
     var log_count: usize = 0;

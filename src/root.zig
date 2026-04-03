@@ -3,19 +3,19 @@ const c = @cImport({
     @cInclude("time.h");
 });
 
-var stdout_mutex = std.Thread.Mutex.Recursive.init;
-var stderr_mutex = std.Thread.Mutex.Recursive.init;
-fn lockStdout() void {
-    stdout_mutex.lock();
+var stdout_mutex = std.Io.Mutex.init;
+var stderr_mutex = std.Io.Mutex.init;
+fn lockStdout(io: std.Io) !void {
+    try stdout_mutex.lock(io);
 }
-fn unlockStdout() void {
-    stdout_mutex.unlock();
+fn unlockStdout(io: std.Io) void {
+    stdout_mutex.unlock(io);
 }
-fn lockStderr() void {
-    stderr_mutex.lock();
+fn lockStderr(io: std.Io) !void {
+    try stderr_mutex.lock(io);
 }
-fn unlockStderr() void {
-    stderr_mutex.unlock();
+fn unlockStderr(io: std.Io) void {
+    stderr_mutex.unlock(io);
 }
 
 pub const Logger = struct {
@@ -46,19 +46,21 @@ pub const Logger = struct {
 
     level: Level,
     scope_stack: std.ArrayList([]const u8),
-    stdout: ?std.fs.File,
-    stderr: ?std.fs.File,
+    stdout: ?std.Io.File,
+    stderr: ?std.Io.File,
     colors: bool,
     allocator: std.mem.Allocator,
-    scope_mutex: std.Thread.Mutex.Recursive,
+    scope_mutex: std.Io.Mutex,
+    io: std.Io,
 
     pub fn init(
         level: Level,
         colors: bool,
         scope: ?[]const u8,
-        stdout: ?std.fs.File,
-        stderr: ?std.fs.File,
+        stdout: ?std.Io.File,
+        stderr: ?std.Io.File,
         allocator: std.mem.Allocator,
+        io: std.Io,
     ) !Logger {
         var scope_stack = std.ArrayList([]const u8).empty;
         if (scope) |s| try scope_stack.append(allocator, s);
@@ -69,29 +71,30 @@ pub const Logger = struct {
             .stderr = stderr,
             .colors = colors,
             .allocator = allocator,
-            .scope_mutex = std.Thread.Mutex.Recursive.init,
+            .scope_mutex = std.Io.Mutex.init,
+            .io = io,
         };
     }
 
     pub fn pushScope(self: *Logger, scope: []const u8) !void {
-        self.scope_mutex.lock();
-        defer self.scope_mutex.unlock();
+        try self.scope_mutex.lock(self.io);
+        defer self.scope_mutex.unlock(self.io);
 
         try self.scope_stack.append(self.allocator, scope);
     }
 
     pub fn popScope(self: *Logger) !void {
-        self.scope_mutex.lock();
-        defer self.scope_mutex.unlock();
+        try self.scope_mutex.lock(self.io);
+        defer self.scope_mutex.unlock(self.io);
 
         if (self.scope_stack.items.len > 0) {
             _ = self.scope_stack.pop();
         }
     }
 
-    fn getCurrentScope(self: *Logger) []const u8 {
-        self.scope_mutex.lock();
-        defer self.scope_mutex.unlock();
+    fn getCurrentScope(self: *Logger) ![]const u8 {
+        try self.scope_mutex.lock(self.io);
+        defer self.scope_mutex.unlock(self.io);
 
         if (self.scope_stack.items.len > 0) {
             return self.scope_stack.items[self.scope_stack.items.len - 1];
@@ -100,15 +103,14 @@ pub const Logger = struct {
         }
     }
 
-    const INIT_CAPACITY = 256;
-
-    fn log(self: *Logger, level: Level, comptime fmt: []const u8, args: anytype) void {
+    fn log(self: *Logger, level: Level, comptime fmt: []const u8, args: anytype) !void {
         if (@intFromEnum(level) < @intFromEnum(self.level)) return;
 
         const is_error = level == .ERROR;
 
         // Get current time
-        const current_time: i64 = std.time.milliTimestamp();
+        const clock = std.Io.Clock.real;
+        const current_time: i64 = clock.now(self.io).toMilliseconds();
         const timestamp = @divFloor(current_time, 1000);
         const ms: u32 = @intCast(@mod(current_time, 1000));
 
@@ -123,26 +125,22 @@ pub const Logger = struct {
         _ = c.strftime(&time_buf, time_buf.len, "%Y-%m-%d %H:%M:%S", &time_struct);
 
         // Build the log message in a buffer first
-        var buf = std.ArrayList(u8).initCapacity(self.allocator, INIT_CAPACITY) catch {
-            @panic("Failed to allocate memory for log message");
-        };
+        var buf = std.ArrayList(u8).empty;
         defer buf.deinit(self.allocator);
 
-        const bufWriter = buf.writer(self.allocator);
-
         if (self.colors) {
-            bufWriter.print("{s}", .{level.getColor()}) catch return;
+            buf.print(self.allocator, "{s}", .{level.getColor()}) catch return;
         }
 
-        const current_scope = self.getCurrentScope();
+        const current_scope = try self.getCurrentScope();
         if (std.mem.eql(u8, current_scope, "")) {
-            bufWriter.print("{s}.{:0>3} [{s}] ", .{
+            buf.print(self.allocator, "{s}.{:0>3} [{s}] ", .{
                 std.mem.sliceTo(&time_buf, 0),
                 ms,
                 level.toString(),
             }) catch return;
         } else {
-            bufWriter.print("{s}.{:0>3} [{s}] ({s}) ", .{
+            buf.print(self.allocator, "{s}.{:0>3} [{s}] ({s}) ", .{
                 std.mem.sliceTo(&time_buf, 0),
                 ms,
                 level.toString(),
@@ -151,61 +149,80 @@ pub const Logger = struct {
         }
 
         if (self.colors) {
-            bufWriter.print("\x1b[0m", .{}) catch return; // Reset color
+            buf.print(self.allocator, "\x1b[0m", .{}) catch return; // Reset color
         }
 
-        bufWriter.print(fmt ++ "\n", args) catch return;
+        buf.print(self.allocator, fmt ++ "\n", args) catch return;
 
+        var stderr_locked = false;
+        var stdout_locked = false;
         if (is_error) {
             if (self.stderr != null) {
                 // Custom file, no need for the global lock
             } else {
-                lockStderr();
-                defer unlockStderr();
+                try lockStderr(self.io);
+                stderr_locked = true;
             }
         } else {
             if (self.stdout != null) {
                 // Custom file, no need for the global lock
             } else {
-                lockStdout();
-                defer unlockStdout();
+                try lockStdout(self.io);
+                stdout_locked = true;
             }
         }
 
+        var buffer: [1024]u8 = undefined;
         if (level == .ERROR) {
             if (self.stderr) |err_file| {
-                nosuspend err_file.writeAll(buf.items) catch {};
+                var file_writer = err_file.writer(self.io, &buffer);
+                var writer = &file_writer.interface;
+                writer.writeAll(buf.items) catch return;
+                writer.flush() catch return;
             } else {
-                nosuspend std.fs.File.stderr().writeAll(buf.items) catch {};
+                const stderr = std.Io.File.stderr();
+                var file_writer = stderr.writer(self.io, &buffer);
+                var writer = &file_writer.interface;
+                writer.writeAll(buf.items) catch return;
+                writer.flush() catch return;
             }
         } else {
             if (self.stdout) |out_file| {
-                nosuspend out_file.writeAll(buf.items) catch {};
+                var file_writer = out_file.writer(self.io, &buffer);
+                var writer = &file_writer.interface;
+                writer.writeAll(buf.items) catch return;
+                writer.flush() catch return;
             } else {
-                nosuspend std.fs.File.stdout().writeAll(buf.items) catch {};
+                const stdout = std.Io.File.stdout();
+                var file_writer = stdout.writer(self.io, &buffer);
+                var writer = &file_writer.interface;
+                writer.writeAll(buf.items) catch return;
+                writer.flush() catch return;
             }
         }
+        if (stderr_locked) unlockStderr(self.io);
+        if (stdout_locked) unlockStdout(self.io);
     }
 
     pub fn debug(self: *Logger, comptime fmt: []const u8, args: anytype) void {
-        self.log(.DEBUG, fmt, args);
+        self.log(.DEBUG, fmt, args) catch {};
     }
 
     pub fn info(self: *Logger, comptime fmt: []const u8, args: anytype) void {
-        self.log(.INFO, fmt, args);
+        self.log(.INFO, fmt, args) catch {};
     }
 
     pub fn warn(self: *Logger, comptime fmt: []const u8, args: anytype) void {
-        self.log(.WARN, fmt, args);
+        self.log(.WARN, fmt, args) catch {};
     }
 
     pub fn err(self: *Logger, comptime fmt: []const u8, args: anytype) void {
-        self.log(.ERROR, fmt, args);
+        self.log(.ERROR, fmt, args) catch {};
     }
 
     pub fn deinit(self: *Logger) void {
-        self.scope_mutex.lock();
-        defer self.scope_mutex.unlock();
+        self.scope_mutex.lock(self.io) catch @panic("Failed to acquire mutex lock");
+        defer self.scope_mutex.unlock(self.io);
 
         var same_file = false;
         if (self.stdout != null and self.stderr != null) {
@@ -216,11 +233,11 @@ pub const Logger = struct {
             }
         }
         if (self.stdout) |file| {
-            std.fs.File.close(file);
+            file.close(self.io);
         }
         if (self.stderr) |file| {
             if (!same_file) {
-                std.fs.File.close(file);
+                file.close(self.io);
             }
         }
         self.scope_stack.deinit(self.allocator);
@@ -235,16 +252,17 @@ pub fn initGlobalLogger(
     level: Logger.Level,
     colors: bool,
     scope: ?[]const u8,
-    stdout: ?std.fs.File,
-    stderr: ?std.fs.File,
+    stdout: ?std.Io.File,
+    stderr: ?std.Io.File,
     allocator: std.mem.Allocator,
+    io: std.Io,
 ) !void {
-    glog = try Logger.init(level, colors, scope, stdout, stderr, allocator);
+    glog = try Logger.init(level, colors, scope, stdout, stderr, allocator, io);
     glog_set = true;
 }
 
 /// Opinionated default global logger
-pub fn initGlogDefault(allocator: std.mem.Allocator) !void {
+pub fn initGlogDefault(allocator: std.mem.Allocator, io: std.Io) !void {
     glog = try Logger.init(
         .INFO,
         true,
@@ -252,6 +270,7 @@ pub fn initGlogDefault(allocator: std.mem.Allocator) !void {
         null,
         null,
         allocator,
+        io,
     );
     glog_set = true;
 }
@@ -319,8 +338,8 @@ pub fn popScope() ![]const u8 {
     if (!glog_set) {
         @panic("Global logger not initialized");
     }
-    glog.scope_mutex.lock();
-    defer glog.scope_mutex.unlock();
+    glog.scope_mutex.lock(glog.io) catch @panic("Failed to acquire mutex lock");
+    defer glog.scope_mutex.unlock(glog.io);
 
     if (glog.scope_stack.items.len > 0) {
         const prev = glog.scope_stack.pop();

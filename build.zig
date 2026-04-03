@@ -37,7 +37,7 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
 
-    lib.linkLibC();
+    lib_mod.link_libc = true;
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
     const lib_unit_tests = b.addTest(.{
         .root_module = test_module,
     });
-    lib_unit_tests.linkLibC();
+    lib_unit_tests.root_module.link_libc = true;
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
@@ -78,4 +78,17 @@ pub fn build(b: *std.Build) void {
 
     const zlog = b.addModule("zlog", .{ .target = target, .optimize = optimize, .root_source_file = b.path("src/root.zig") });
     zlog.link_libc = true;
+
+    const exe = b.addExecutable(.{
+        .name = "zlog",
+        .root_module = lib_check_module,
+    });
+    b.installArtifact(exe); // Install the executable
+    const run_cmd = b.addRunArtifact(exe);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+    const run_step = b.step("run", "Run the app");
+    run_step.dependOn(&run_cmd.step);
 }

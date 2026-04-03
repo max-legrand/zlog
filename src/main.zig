@@ -1,8 +1,9 @@
 const std = @import("std");
 const Logger = @import("root.zig");
 
-pub fn main() !void {
-    const allocator = std.heap.page_allocator;
+pub fn main(init: std.process.Init) !void {
+    const allocator = std.heap.smp_allocator;
+    std.debug.print("Standard print...\n", .{});
     try Logger.initGlobalLogger(
         Logger.Logger.Level.DEBUG,
         true,
@@ -10,6 +11,7 @@ pub fn main() !void {
         null,
         null,
         allocator,
+        init.io,
     );
     defer Logger.deinitGlobalLogger();
 
