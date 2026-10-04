@@ -1,7 +1,5 @@
 const std = @import("std");
-const c = @cImport({
-    @cInclude("time.h");
-});
+const c = @import("c");
 
 var stdout_mutex = std.Io.Mutex.init;
 var stderr_mutex = std.Io.Mutex.init;
@@ -104,7 +102,7 @@ pub const Logger = struct {
     }
 
     fn log(self: *Logger, level: Level, comptime fmt: []const u8, args: anytype) !void {
-        if (@intFromEnum(level) < @intFromEnum(self.level)) return;
+        if (@backingInt(level) < @backingInt(self.level)) return;
 
         const is_error = level == .ERROR;
 
@@ -175,26 +173,26 @@ pub const Logger = struct {
         var buffer: [1024]u8 = undefined;
         if (level == .ERROR) {
             if (self.stderr) |err_file| {
-                var file_writer = err_file.writer(self.io, &buffer);
+                var file_writer = err_file.writerStreaming(self.io, &buffer);
                 var writer = &file_writer.interface;
                 writer.writeAll(buf.items) catch return;
                 writer.flush() catch return;
             } else {
                 const stderr = std.Io.File.stderr();
-                var file_writer = stderr.writer(self.io, &buffer);
+                var file_writer = stderr.writerStreaming(self.io, &buffer);
                 var writer = &file_writer.interface;
                 writer.writeAll(buf.items) catch return;
                 writer.flush() catch return;
             }
         } else {
             if (self.stdout) |out_file| {
-                var file_writer = out_file.writer(self.io, &buffer);
+                var file_writer = out_file.writerStreaming(self.io, &buffer);
                 var writer = &file_writer.interface;
                 writer.writeAll(buf.items) catch return;
                 writer.flush() catch return;
             } else {
                 const stdout = std.Io.File.stdout();
-                var file_writer = stdout.writer(self.io, &buffer);
+                var file_writer = stdout.writerStreaming(self.io, &buffer);
                 var writer = &file_writer.interface;
                 writer.writeAll(buf.items) catch return;
                 writer.flush() catch return;

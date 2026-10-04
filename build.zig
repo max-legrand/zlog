@@ -1,4 +1,5 @@
 const std = @import("std");
+const Translator = @import("translate_c").Translator;
 
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
@@ -15,6 +16,12 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    const translator: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = b.path("src/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // This creates a "module", which represents a collection of source files alongside
     // some compilation options, such as optimization mode and linked system libraries.
     // Every executable or library we compile will be based on one or more modules.
@@ -26,6 +33,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "c", .module = translator.mod }},
     });
 
     // Now, we will create a static library based on the module we created above.
@@ -50,6 +58,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "c", .module = translator.mod }},
     });
     const lib_unit_tests = b.addTest(.{
         .root_module = test_module,
@@ -68,6 +77,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "c", .module = translator.mod }},
     });
     const lib_check = b.addExecutable(.{
         .name = "check",
@@ -76,7 +86,12 @@ pub fn build(b: *std.Build) void {
     const check = b.step("check", "Check if the program compiles");
     check.dependOn(&lib_check.step);
 
-    const zlog = b.addModule("zlog", .{ .target = target, .optimize = optimize, .root_source_file = b.path("src/root.zig") });
+    const zlog = b.addModule("zlog", .{
+        .target = target,
+        .optimize = optimize,
+        .root_source_file = b.path("src/root.zig"),
+        .imports = &.{.{ .name = "c", .module = translator.mod }},
+    });
     zlog.link_libc = true;
 
     const exe = b.addExecutable(.{
@@ -86,9 +101,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe); // Install the executable
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 }
