@@ -1,5 +1,37 @@
 const std = @import("std");
-const c = @import("c");
+
+// Convert Unix milliseconds to a UTC Gregorian date, including dates before 1970.
+fn formatUtc(buffer: []u8, milliseconds: i64) ![]const u8 {
+    const seconds = @divFloor(milliseconds, 1000);
+    const days = @divFloor(seconds, 86400);
+    const day_seconds = @mod(seconds, 86400);
+
+    // Gregorian civil date conversion, based on Howard Hinnant's civil_from_days.
+    const z = days + 719468;
+    const era = @divFloor(z, 146097);
+    const day_of_era = z - era * 146097;
+    const year_of_era = @divTrunc(day_of_era - @divTrunc(day_of_era, 1460) + @divTrunc(day_of_era, 36524) - @divTrunc(day_of_era, 146096), 365);
+    var year = year_of_era + era * 400;
+    const day_of_year = day_of_era - (365 * year_of_era + @divTrunc(year_of_era, 4) - @divTrunc(year_of_era, 100));
+    const month_prime = @divTrunc(5 * day_of_year + 2, 153);
+    const day = day_of_year - @divTrunc(153 * month_prime + 2, 5) + 1;
+    const month = month_prime + (if (month_prime < 10) @as(i64, 3) else -9);
+    if (month <= 2) year += 1;
+
+    return std.fmt.bufPrint(buffer, "{s}{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
+        if (year < 0) "-" else "", @abs(year), @as(u8, @intCast(month)), @as(u8, @intCast(day)),
+        @as(u8, @intCast(@divTrunc(day_seconds, 3600))), @as(u8, @intCast(@divTrunc(@mod(day_seconds, 3600), 60))),
+        @as(u8, @intCast(@mod(day_seconds, 60))), @as(u16, @intCast(@mod(milliseconds, 1000))),
+    });
+}
+
+test "UTC timestamp formatting" {
+    var buffer: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("1970-01-01 00:00:00.000Z", try formatUtc(&buffer, 0));
+    try std.testing.expectEqualStrings("1969-12-31 23:59:59.999Z", try formatUtc(&buffer, -1));
+    try std.testing.expectEqualStrings("2000-02-29 12:34:56.789Z", try formatUtc(&buffer, 951827696789));
+    try std.testing.expectEqualStrings("2100-03-01 00:00:00.000Z", try formatUtc(&buffer, 4107542400000));
+}
 
 var stdout_mutex = std.Io.Mutex.init;
 var stderr_mutex = std.Io.Mutex.init;
@@ -106,21 +138,9 @@ pub const Logger = struct {
 
         const is_error = level == .ERROR;
 
-        // Get current time
-        const clock = std.Io.Clock.real;
-        const current_time: i64 = clock.now(self.io).toMilliseconds();
-        const timestamp = @divFloor(current_time, 1000);
-        const ms: u32 = @intCast(@mod(current_time, 1000));
-
-        var time_struct: c.tm = undefined;
-        const time_ptr = c.localtime(&timestamp);
-        if (time_ptr) |tm| {
-            time_struct = tm.*;
-        } else return;
-
-        // Format the time string
-        var time_buf: [32]u8 = undefined;
-        _ = c.strftime(&time_buf, time_buf.len, "%Y-%m-%d %H:%M:%S", &time_struct);
+        const current_time = std.Io.Clock.real.now(self.io).toMilliseconds();
+        var time_buf: [64]u8 = undefined;
+        const time_string = try formatUtc(&time_buf, current_time);
 
         // Build the log message in a buffer first
         var buf = std.ArrayList(u8).empty;
@@ -132,15 +152,13 @@ pub const Logger = struct {
 
         const current_scope = try self.getCurrentScope();
         if (std.mem.eql(u8, current_scope, "")) {
-            buf.print(self.allocator, "{s}.{:0>3} [{s}] ", .{
-                std.mem.sliceTo(&time_buf, 0),
-                ms,
+            buf.print(self.allocator, "{s} [{s}] ", .{
+                time_string,
                 level.toString(),
             }) catch return;
         } else {
-            buf.print(self.allocator, "{s}.{:0>3} [{s}] ({s}) ", .{
-                std.mem.sliceTo(&time_buf, 0),
-                ms,
+            buf.print(self.allocator, "{s} [{s}] ({s}) ", .{
+                time_string,
                 level.toString(),
                 current_scope,
             }) catch return;

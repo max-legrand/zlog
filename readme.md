@@ -3,6 +3,8 @@
 A small, opinionated logger for Zig. Based on personal preferences,
 this libray might not be useful for you, and that's OK!
 
+Log timestamps are in UTC, with millisecond precision and a `Z` suffix.
+
 ## How to use
 
 First include the module in your build.zig.zon, or run the following:

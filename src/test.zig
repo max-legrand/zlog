@@ -46,6 +46,8 @@ test "basic logging" {
     var it = std.mem.splitSequence(u8, contents, "\n");
     while (it.next()) |line| {
         if (std.mem.trim(u8, line, &[_]u8{ ' ', '\t', '\n' }).len == 0) continue;
+        try testing.expect(line.len >= 26);
+        try testing.expectEqualStrings("Z [", line[23..26]);
         log_count += 1;
     }
     try testing.expectEqual(4, log_count);
